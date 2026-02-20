@@ -1,0 +1,285 @@
+# ===============================================================
+# DNA Methylation + CNV Integrated Analysis Pipeline
+# High-Grade Serous Ovarian Cancer (HGSOC)
+# Datasets: GSE81224 (Normal + Untreated), GSE65820 (Treated)
+# ===============================================================
+
+
+# ===============================================================
+# 1. Load Required Packages
+# ===============================================================
+
+library(minfi)
+library(DMRcate)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+library(limma)
+library(VennDiagram)
+library(stringr)
+
+
+
+# ===============================================================
+# 2. Define Data Paths
+# ===============================================================
+
+path_normal <- "C:/Users/Admin/Downloads/normal"
+path_treated <- "C:/Users/Admin/Downloads/GSE65820_RAW (1)"
+path_untreated <- "C:/Users/Admin/Downloads/GSE81224_filtered"
+
+metadata <- read.csv("C:/Users/Admin/Downloads/full_sample_metadata.csv", stringsAsFactors = FALSE)
+
+
+
+# ===============================================================
+# 3. IDAT Import & Preprocessing
+# ===============================================================
+
+rgSet <- read.metharray.exp(targets = metadata)
+
+mSet <- preprocessQuantile(rgSet)
+beta_values <- getBeta(mSet)
+
+
+
+# ===============================================================
+# 4. Differential Methylation Analysis (limma)
+# ===============================================================
+
+group <- factor(metadata$condition)
+design <- model.matrix(~0 + group)
+colnames(design) <- levels(group)
+
+fit <- lmFit(beta_values, design)
+
+contMatrix <- makeContrasts(
+  Treated_vs_Normal = Treated - Normal,
+  Untreated_vs_Normal = Untreated - Normal,
+  levels = design
+)
+
+fit2 <- contrasts.fit(fit, contMatrix)
+fit2 <- eBayes(fit2)
+
+top200_treated <- topTable(fit2, coef = "Treated_vs_Normal", number = 200, sort.by = "P")
+top200_untreated <- topTable(fit2, coef = "Untreated_vs_Normal", number = 200, sort.by = "P")
+
+
+
+# ===============================================================
+# 5. CpG Annotation
+# ===============================================================
+
+annotation <- getAnnotation(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+
+top200_treated$CpG_ID <- rownames(top200_treated)
+top200_untreated$CpG_ID <- rownames(top200_untreated)
+
+top200_treated_annot <- merge(top200_treated,
+                              annotation[, c("Name", "UCSC_RefGene_Name")],
+                              by.x = "CpG_ID",
+                              by.y = "Name",
+                              all.x = TRUE)
+
+top200_untreated_annot <- merge(top200_untreated,
+                                annotation[, c("Name", "UCSC_RefGene_Name")],
+                                by.x = "CpG_ID",
+                                by.y = "Name",
+                                all.x = TRUE)
+
+
+
+# ===============================================================
+# 6. Methylation Regulation Classification
+# ===============================================================
+
+get_regulation_status <- function(logfc) {
+  if (logfc > 0) {
+    return("Hypermethylated")
+  } else if (logfc < 0) {
+    return("Hypomethylated")
+  } else {
+    return("No Change")
+  }
+}
+
+top200_treated_annot$Regulation <- sapply(top200_treated_annot$logFC, get_regulation_status)
+top200_untreated_annot$Regulation <- sapply(top200_untreated_annot$logFC, get_regulation_status)
+
+write.csv(top200_treated_annot, "top200_dmrs_treated_annotated.csv", row.names = FALSE)
+write.csv(top200_untreated_annot, "top200_dmrs_untreated_annotated.csv", row.names = FALSE)
+
+
+
+# ===============================================================
+# 7. Gene Extraction & Venn Analysis
+# ===============================================================
+
+clean_genes <- function(x) {
+  genes <- unlist(strsplit(x, ";"))
+  genes <- unique(trimws(genes))
+  genes[genes != ""]
+}
+
+genes_treated <- unique(unlist(sapply(top200_treated_annot$UCSC_RefGene_Name[1:100], clean_genes)))
+genes_untreated <- unique(unlist(sapply(top200_untreated_annot$UCSC_RefGene_Name[1:100], clean_genes)))
+
+write.csv(data.frame(Gene = genes_treated), "top100_genes_treated.csv", row.names = FALSE)
+write.csv(data.frame(Gene = genes_untreated), "top100_genes_untreated.csv", row.names = FALSE)
+
+common_genes <- intersect(genes_treated, genes_untreated)
+
+venn.plot <- venn.diagram(
+  x = list(Treated = genes_treated, Untreated = genes_untreated),
+  category.names = c("Treated", "Untreated"),
+  filename = NULL,
+  output = TRUE,
+  col = "black",
+  fill = c("skyblue", "salmon"),
+  alpha = 0.5,
+  label.col = "black",
+  cex = 1.5,
+  fontface = "bold",
+  cat.cex = 1.5,
+  cat.fontface = "bold",
+  main = "Top 100 Genes: Treated vs Untreated"
+)
+
+grid::grid.draw(venn.plot)
+
+write.csv(data.frame(Common_Genes = common_genes),
+          "common_genes_top100_treated_untreated.csv",
+          row.names = FALSE)
+
+
+
+# ===============================================================
+# 8. Transcription Factor Mapping (TRRUST)
+# ===============================================================
+
+trrust_file <- "trrust_rawdata.human (1).tsv"
+
+trrust_data <- read.delim(trrust_file,
+                          header = FALSE,
+                          sep = "\t",
+                          col.names = c("TF", "Target", "Mode", "PMID"))
+
+your_genes <- c("SEPW1", "SPARCL1", "ZNF274", "FAM193A", "ERAP1", "PARP4")
+
+matched_genes <- trrust_data[
+  trrust_data$TF %in% your_genes |
+  trrust_data$Target %in% your_genes, ]
+
+write.csv(matched_genes, "trrust_matches_common_genes.csv", row.names = FALSE)
+
+print(matched_genes)
+
+
+
+# ===============================================================
+# 9. Targeted CpG Methylation Status Check
+# ===============================================================
+
+cpg_sites <- c("cg08618451", "cg22720790")
+
+for (cpg in cpg_sites) {
+  if (cpg %in% rownames(beta_values)) {
+    beta_vals <- beta_values[cpg, ]
+    avg_beta <- mean(beta_vals)
+    methylation_status <- ifelse(avg_beta > 0.9,
+                                 "Hypermethylated",
+                                 "Hypomethylated")
+
+    print(paste("CpG:", cpg))
+    print(paste("Methylation Status:", methylation_status))
+    print(paste("Average Beta Value:", round(avg_beta, 4)))
+    cat("\n")
+  } else {
+    print(paste("CpG site", cpg,
+                "not found in the beta values matrix."))
+  }
+}
+
+
+
+# ===============================================================
+# 10. CNV Analysis Workflow
+# ===============================================================
+
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+output_dir <- "C:/Users/Admin/Downloads/Treated_cnvPlots"
+if(!dir.exists(output_dir)) dir.create(output_dir)
+
+seg_list <- lapply(seg_all, function(x) {
+  seg_df <- x$summary
+  seg_df$sample <- x$sample
+  return(seg_df)
+})
+
+seg_combined <- do.call(rbind, seg_list)
+
+seg_file <- file.path(output_dir, "Treated_Segmentation_Data.csv")
+write.csv(seg_combined, seg_file, row.names = FALSE)
+
+seg_combined <- seg_combined %>%
+  mutate(
+    CNV_status = case_when(
+      seg.mean > 0.2  ~ "Amplification",
+      seg.mean < -0.2 ~ "Deletion",
+      TRUE            ~ "Neutral"
+    )
+  )
+
+cnv_summary <- seg_combined %>%
+  filter(CNV_status != "Neutral") %>%
+  group_by(chrom, CNV_status) %>%
+  summarise(count = n(), .groups = "drop") %>%
+  arrange(chrom)
+
+summary_file <- file.path(output_dir, "Treated_CNV_Summary.csv")
+write.csv(cnv_summary, summary_file, row.names = FALSE)
+
+cnv_wide <- cnv_summary %>%
+  pivot_wider(
+    names_from = CNV_status,
+    values_from = count,
+    values_fill = 0
+  ) %>%
+  arrange(chrom)
+
+wide_file <- file.path(output_dir, "Treated_CNV_Summary_Wide.csv")
+write.csv(cnv_wide, wide_file, row.names = FALSE)
+
+graphics.off()
+
+p <- ggplot(cnv_wide, aes(x = chrom)) +
+  geom_bar(aes(y = Amplification, fill = "Amplification"),
+           stat = "identity",
+           position = "dodge",
+           color = "black") +
+  geom_bar(aes(y = Deletion, fill = "Deletion"),
+           stat = "identity",
+           position = "dodge",
+           color = "black") +
+  scale_fill_manual(values = c("Amplification" = "red",
+                               "Deletion" = "green")) +
+  labs(
+    title = "CNV Distribution Across Chromosomes (Treated Samples)",
+    x = "Chromosome",
+    y = "Number of CNV Segments",
+    fill = "CNV Event"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    panel.background = element_rect(fill = "white"),
+    plot.background = element_rect(fill = "white")
+  )
+
+plot_file <- file.path(output_dir, "Treated_CNV_Distribution_BarPlot.png")
+ggsave(plot_file, plot = p, width = 10, height = 6, dpi = 300, bg = "white")
+
+print(p)
