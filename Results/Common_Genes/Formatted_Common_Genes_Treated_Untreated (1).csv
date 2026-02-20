@@ -1,0 +1,7 @@
+Gene_Symbol,CpG_ID_treated,CpG_ID_untreated,logFC_Treated,Regulation_Treated,P.Value_Treated,logFC_Untreated,Regulation_Untreated,P.Value_Untreated
+SEPW1,cg07953015,cg07953015,3.764364335,Hypermethylated,1.9166e-27,3.313110977,Hypermethylated,1.6576e-08
+SPARCL1,cg05350879,cg05350879,3.240018733,Hypermethylated,2.6334e-25,2.503717616,Hypermethylated,1.4534e-08
+ZNF274,cg22720790,cg22720790,3.55749649,Hypermethylated,3.3175e-23,3.264465247,Hypermethylated,1.5131e-08
+ERAP1,cg08618451,cg08618451,2.363329801,Hypermethylated,2.294e-22,2.373717361,Hypermethylated,1.4264e-09
+FAM193A,cg26981170,cg25790133,1.983532946,Hypermethylated,1.39728991977022e-22,3.821516324,Hypermethylated,3.28911084621758e-09
+PARP4,cg20765408,cg17117459,-3.100639074,Hypomethylated,2.70320020845241e-22,-3.833103469,Hypomethylated,1.7218251397781e-08
